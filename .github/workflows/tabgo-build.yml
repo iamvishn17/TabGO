@@ -8,80 +8,109 @@ on:
 permissions:
   contents: read
 
+env:
+  ENGINE_REPO: efekurucay/anydisplay
+  ENGINE_REF: d090a9e20ac785fb34d1f53877e095c319e02569
+
 jobs:
-  build:
-    name: Build TabGO for Android and Windows
-    runs-on: windows-latest
+  android:
+    name: TabGO Android app
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout TabGO
         uses: actions/checkout@v4
-
       - name: Checkout pinned video engine source
         uses: actions/checkout@v4
         with:
           repository: efekurucay/anydisplay
           ref: d090a9e20ac785fb34d1f53877e095c319e02569
           path: engine
-
-      - name: Brand Android app and default to mirror mode
-        shell: pwsh
+      - name: Brand app and default to mirror mode
         run: |
-          $strings = "engine/android/app/src/main/res/values/strings.xml"
-          $xml = Get-Content $strings -Raw
-          $xml = $xml.Replace("AnyDisplay", "TabGO")
-          $xml = $xml.Replace("Extending %1$s", "Mirroring %1$s")
-          Set-Content -Path $strings -Value $xml -Encoding utf8
-
-          $settings = "engine/android/app/src/main/java/dev/anydisplay/client/data/Settings.kt"
-          $kt = Get-Content $settings -Raw
-          $kt = $kt.Replace('prefs.getString(K_SCALE, "1.0")', 'prefs.getString(K_SCALE, "0.75")')
-          $kt = $kt.Replace('prefs.getBoolean(K_MIRROR, false)', 'prefs.getBoolean(K_MIRROR, true)')
-          Set-Content -Path $settings -Value $kt -Encoding utf8
-
-          $prefs = "engine/android/app/src/main/res/xml/settings.xml"
-          $px = Get-Content $prefs -Raw
-          $px = $px.Replace('app:defaultValue="1.0"', 'app:defaultValue="0.75"')
-          $px = [regex]::Replace($px, '(?s)(<SwitchPreferenceCompat(?:(?!</SwitchPreferenceCompat>).)*app:defaultValue=")false("(?:(?!</SwitchPreferenceCompat>).)*app:key="mirror")', '$1true$2', 1)
-          Set-Content -Path $prefs -Value $px -Encoding utf8
-
-          $root = "engine/android/settings.gradle.kts"
-          $rx = Get-Content $root -Raw
-          $rx = $rx.Replace('rootProject.name = "AnyDisplay"', 'rootProject.name = "TabGO"')
-          Set-Content -Path $root -Value $rx -Encoding utf8
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path("engine/android/app/src/main/res/values/strings.xml")
+          s = p.read_text()
+          s = s.replace("AnyDisplay", "TabGO").replace("Extending %1$s", "Mirroring %1$s")
+          p.write_text(s)
+          p = Path("engine/android/app/src/main/java/dev/anydisplay/client/data/Settings.kt")
+          s = p.read_text().replace('prefs.getString(K_SCALE, "1.0")', 'prefs.getString(K_SCALE, "0.75")')
+          s = s.replace('prefs.getBoolean(K_MIRROR, false)', 'prefs.getBoolean(K_MIRROR, true)')
+          p.write_text(s)
+          p = Path("engine/android/app/src/main/res/xml/settings.xml")
+          s = p.read_text().replace('app:defaultValue="1.0"', 'app:defaultValue="0.75"')
+          s, n = re.subn(r'(<SwitchPreferenceCompat(?:(?!</SwitchPreferenceCompat>).)*app:defaultValue=")false("(?:(?!</SwitchPreferenceCompat>).)*app:key="mirror")', r'\1true\2', s, count=1, flags=re.S)
+          assert n == 1, "Could not set mirror mode as the default"
+          p.write_text(s)
+          p = Path("engine/android/settings.gradle.kts")
+          p.write_text(p.read_text().replace('rootProject.name = "AnyDisplay"', 'rootProject.name = "TabGO"'))
+          PY
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Build Android APK and run tests
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Test and build APK
         working-directory: engine/android
-        shell: pwsh
-        run: |
-          .\gradlew.bat testDebugUnitTest assembleDebug
+        run: ./gradlew testDebugUnitTest assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tabgo-android-apk
+          path: engine/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build and test Windows host
+  windows:
+    name: TabGO Windows host
+    runs-on: windows-latest
+    steps:
+      - name: Checkout pinned video engine source
+        uses: actions/checkout@v4
+        with:
+          repository: efekurucay/anydisplay
+          ref: d090a9e20ac785fb34d1f53877e095c319e02569
+          path: engine
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine/windows
+      - name: Test and build Windows host
         working-directory: engine/windows
-        shell: pwsh
         run: |
           cargo test
           cargo build --release
           Copy-Item target/release/anydisplay-win.exe target/release/TabGO.exe
-
-      - name: Package TabGO Windows + Android
         shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tabgo-windows-host
+          path: engine/windows/target/release/TabGO.exe
+          if-no-files-found: error
+
+  package:
+    name: Package complete TabGO ZIP
+    needs: [android, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pinned license
+        uses: actions/checkout@v4
+        with:
+          repository: efekurucay/anydisplay
+          ref: d090a9e20ac785fb34d1f53877e095c319e02569
+          path: engine
+      - uses: actions/download-artifact@v4
+        with:
+          name: tabgo-android-apk
+          path: dist/TabGO
+      - uses: actions/download-artifact@v4
+        with:
+          name: tabgo-windows-host
+          path: dist/TabGO
+      - name: Assemble package
         run: |
-          New-Item -ItemType Directory -Force -Path dist/TabGO | Out-Null
-          Copy-Item engine/android/app/build/outputs/apk/debug/app-debug.apk dist/TabGO/TabGO-Android.apk
-          Copy-Item engine/windows/target/release/TabGO.exe dist/TabGO/TabGO.exe
-          @'
+          mv dist/TabGO/app-debug.apk dist/TabGO/TabGO-Android.apk
+          cp engine/LICENSE dist/TabGO/LICENSE-ANYDISPLAY.txt
+          cat > "dist/TabGO/Connect TabGO over USB.bat" <<'BAT'
           @echo off
           cd /d "%~dp0"
           set "ANYDISPLAY_STORE=%APPDATA%\TabGO\host.json"
@@ -106,8 +135,8 @@ jobs:
           echo.
           echo TabGO has stopped.
           pause
-          '@ | Set-Content -Path "dist/TabGO/Connect TabGO over USB.bat" -Encoding ascii
-          @'
+          BAT
+          cat > dist/TabGO/README.txt <<'TXT'
           TabGO - wired Android screen mirroring
 
           Contents
@@ -140,12 +169,9 @@ jobs:
           - Hardware codec availability depends on the PC GPU/driver and tablet decoder.
           - This package is based on the MIT-licensed AnyDisplay project. See LICENSE-ANYDISPLAY.txt.
           - The Windows host is a command-line companion launched through the included batch file.
-          '@ | Set-Content -Path "dist/TabGO/README.txt" -Encoding utf8
-          Copy-Item engine/LICENSE dist/TabGO/LICENSE-ANYDISPLAY.txt
-          Compress-Archive -Path dist/TabGO/* -DestinationPath dist/TabGO-Windows-Android.zip -Force
-
-      - name: Upload complete TabGO package
-        uses: actions/upload-artifact@v4
+          TXT
+          cd dist && zip -r TabGO-Windows-Android.zip TabGO
+      - uses: actions/upload-artifact@v4
         with:
           name: TabGO-Windows-Android
           path: dist/TabGO-Windows-Android.zip
