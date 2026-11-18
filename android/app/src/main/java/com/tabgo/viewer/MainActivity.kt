@@ -1,64 +1,217 @@
 package com.tabgo.viewer
 
 import android.app.Activity
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.os.Bundle
+import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
-import android.webkit.WebChromeClient
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import android.widget.FrameLayout
+import android.view.WindowManager
+import android.widget.LinearLayout
 import android.widget.TextView
+import org.json.JSONObject
+import java.io.BufferedOutputStream
+import java.io.OutputStream
+import java.net.ServerSocket
+import java.net.Socket
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
+import kotlin.math.max
 
 class MainActivity : Activity() {
-    private lateinit var web: WebView
-    private lateinit var message: TextView
+    companion object { private const val PORT = 38177 }
+    private val running = AtomicBoolean(true)
+    private val connected = AtomicBoolean(false)
+    @Volatile private var output: OutputStream? = null
+    private lateinit var status: TextView
+    private lateinit var surface: TabletSurface
+    private var lastSentAt = 0L
+    private var eventCount = 0
+    private var rateWindowStart = System.currentTimeMillis()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.decorView.systemUiVisibility =
-            (View.SYSTEM_UI_FLAG_FULLSCREEN
-                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_FULLSCREEN
+            or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+            or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION)
 
-        val root = FrameLayout(this)
-        root.setBackgroundColor(0xFF080B12.toInt())
-        message = TextView(this).apply {
-            text = "TabGO\n\nWaiting for your PC…\nStart USB Mirror in TabGO Desktop."
-            setTextColor(0xFFEAF0FA.toInt())
-            textSize = 18f
-            gravity = android.view.Gravity.CENTER
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.rgb(31, 33, 36))
         }
-        web = WebView(this).apply {
-            setBackgroundColor(0xFF080B12.toInt())
-            settings.javaScriptEnabled = false
-            settings.domStorageEnabled = false
-            webChromeClient = WebChromeClient()
-            webViewClient = object : WebViewClient() {
-                override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
-                    message.visibility = View.VISIBLE
-                    message.text = "TabGO\n\nPC stream not available.\nStart the Windows app, then reopen TabGO."
-                }
-                override fun onPageFinished(view: WebView?, url: String?) {
-                    message.visibility = View.GONE
-                }
-            }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(22), dp(12), dp(22), dp(12))
+            setBackgroundColor(Color.rgb(37, 40, 44))
         }
-        root.addView(web, FrameLayout.LayoutParams(-1, -1))
-        root.addView(message, FrameLayout.LayoutParams(-1, -1))
+        val brand = TextView(this).apply {
+            text = "TABGO"
+            textSize = 15f
+            letterSpacing = 0.18f
+            setTextColor(Color.rgb(236, 239, 243))
+            typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
+        }
+        status = TextView(this).apply {
+            text = "●  NOT CONNECTED"
+            textSize = 11f
+            letterSpacing = 0.06f
+            setTextColor(Color.rgb(150, 156, 165))
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+        }
+        header.addView(brand, LinearLayout.LayoutParams(0, dp(30), 1f))
+        header.addView(status)
+        root.addView(header, LinearLayout.LayoutParams(-1, dp(54)))
+        surface = TabletSurface()
+        root.addView(surface, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
-        web.loadUrl("http://127.0.0.1:8765/")
+        startUsbServer()
     }
 
-    override fun onResume() {
-        super.onResume()
-        if (::web.isInitialized) web.reload()
+    private fun startUsbServer() {
+        thread(name = "TabGO-USB-server", isDaemon = true) {
+            try {
+                ServerSocket(PORT).use { server ->
+                    while (running.get()) {
+                        val client = try { server.accept() } catch (_: Exception) { break }
+                        try {
+                            output = BufferedOutputStream(client.getOutputStream())
+                            connected.set(true)
+                            runOnUiThread { updateConnection(true) }
+                            while (running.get() && !client.isClosed) {
+                                try { Thread.sleep(250) } catch (_: InterruptedException) { break }
+                                if (client.isInputShutdown) break
+                            }
+                        } catch (_: Exception) {
+                        } finally {
+                            connected.set(false)
+                            output = null
+                            try { client.close() } catch (_: Exception) {}
+                            runOnUiThread { updateConnection(false) }
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                runOnUiThread { status.text = "●  USB SERVICE ERROR" }
+            }
+        }
+    }
+
+    private fun updateConnection(value: Boolean) {
+        status.text = if (value) "●  CONNECTED" else "●  NOT CONNECTED"
+        status.setTextColor(if (value) Color.rgb(87, 214, 154) else Color.rgb(150, 156, 165))
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun sendPen(event: MotionEvent, action: String) {
+        if (event.pointerCount == 0) return
+        val index = 0
+        val tool = event.getToolType(index)
+        if (tool != MotionEvent.TOOL_TYPE_STYLUS && tool != MotionEvent.TOOL_TYPE_ERASER) return
+        val width = max(1, surface.width)
+        val height = max(1, surface.height)
+        val nx = (event.getX(index) / width).coerceIn(0f, 1f)
+        val ny = (event.getY(index) / height).coerceIn(0f, 1f)
+        val pressure = event.getPressure(index).coerceIn(0f, 1f)
+        eventCount++
+        val now = System.currentTimeMillis()
+        if (now - rateWindowStart >= 1000) { eventCount = 0; rateWindowStart = now }
+        val packet = JSONObject().apply {
+            put("type", "pen")
+            put("action", action)
+            put("x", nx.toDouble())
+            put("y", ny.toDouble())
+            put("pressure", pressure.toDouble())
+            put("contact", action == "down" || (action == "move" && pressure > 0f))
+            put("tiltX", event.getAxisValue(MotionEvent.AXIS_TILT, index).toDouble())
+            put("tiltY", event.getAxisValue(MotionEvent.AXIS_ORIENTATION, index).toDouble())
+            put("buttons", event.buttonState)
+            put("tool", if (tool == MotionEvent.TOOL_TYPE_ERASER) "eraser" else "stylus")
+            put("eventTime", event.eventTime)
+            put("rate", eventCount)
+        }.toString() + "\n"
+        try {
+            synchronized(this) {
+                output?.write(packet.toByteArray(Charsets.UTF_8))
+                output?.flush()
+            }
+        } catch (_: Exception) {
+            connected.set(false)
+            runOnUiThread { updateConnection(false) }
+        }
+        surface.updatePen(nx, ny, action != "up" && action != "hover_exit", action == "down" || (action == "move" && pressure > 0f))
+    }
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS || event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> sendPen(event, "hover")
+                MotionEvent.ACTION_HOVER_EXIT -> sendPen(event, "hover_exit")
+                MotionEvent.ACTION_MOVE -> sendPen(event, "move")
+            }
+            return true
+        }
+        return super.dispatchGenericMotionEvent(event)
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS || event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> sendPen(event, "down")
+                MotionEvent.ACTION_MOVE -> sendPen(event, "move")
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> sendPen(event, "up")
+            }
+            return true
+        }
+        return true
     }
 
     override fun onDestroy() {
-        if (::web.isInitialized) web.destroy()
+        running.set(false)
+        try { output?.close() } catch (_: Exception) {}
         super.onDestroy()
+    }
+
+    private inner class TabletSurface : View(this@MainActivity) {
+        private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(61, 65, 71); strokeWidth = dp(1).toFloat() }
+        private val penPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(139, 156, 255); style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat() }
+        private val touchPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(87, 214, 154); style = Paint.Style.STROKE; strokeWidth = dp(2).toFloat() }
+        private var px = -1f
+        private var py = -1f
+        private var visible = false
+        private var touching = false
+
+        fun updatePen(x: Float, y: Float, show: Boolean, contact: Boolean) {
+            px = x; py = y; visible = show; touching = contact; postInvalidateOnAnimation()
+        }
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            canvas.drawColor(Color.rgb(31, 33, 36))
+            val spacing = dp(22).toFloat()
+            var x = dp(12).toFloat()
+            while (x < width) {
+                var y = dp(12).toFloat()
+                while (y < height) {
+                    canvas.drawCircle(x, y, dp(1).toFloat(), dotPaint)
+                    y += spacing
+                }
+                x += spacing
+            }
+            if (visible) {
+                val cx = px * width
+                val cy = py * height
+                canvas.drawCircle(cx, cy, dp(8).toFloat(), if (touching) touchPaint else penPaint)
+                canvas.drawLine(cx - dp(15), cy, cx + dp(15), cy, if (touching) touchPaint else penPaint)
+                canvas.drawLine(cx, cy - dp(15), cx, cy + dp(15), if (touching) touchPaint else penPaint)
+            }
+        }
     }
 }
