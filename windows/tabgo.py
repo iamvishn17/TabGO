@@ -507,7 +507,7 @@ class MainWindow(QMainWindow):
         self.capability_text.setObjectName("muted"); self.capability_text.setWordWrap(True)
         status.layout.addWidget(self.capability_text)
         layout.addWidget(status)
-        warning = QLabel("Pressure is currently received and displayed as telemetry. Pressure-sensitive drawing in Windows apps requires a dedicated Windows pen digitizer/HID driver; this preview does not pretend mouse input is pressure input.")
+        warning = QLabel("Native Windows PT_PEN pressure injection is used when available. Pressure-sensitive drawing in Windows apps requires a dedicated Windows pen digitizer/HID driver; this preview does not pretend mouse input is pressure input.")
         warning.setObjectName("notice"); warning.setWordWrap(True); layout.addWidget(warning)
         layout.addStretch(1)
         self.stack.addWidget(page)
