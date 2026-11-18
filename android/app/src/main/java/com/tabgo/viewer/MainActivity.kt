@@ -72,6 +72,28 @@ class MainActivity : Activity() {
         surface = TabletSurface()
         root.addView(surface, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
+        surface.setOnTouchListener { _, event ->
+            val tool = if (event.pointerCount > 0) event.getToolType(0) else MotionEvent.TOOL_TYPE_UNKNOWN
+            if (tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER) {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> sendPen(event, "down")
+                    MotionEvent.ACTION_MOVE -> sendPen(event, "move")
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> sendPen(event, "up")
+                }
+                true
+            } else false
+        }
+        surface.setOnGenericMotionListener { _, event ->
+            val tool = if (event.pointerCount > 0) event.getToolType(0) else MotionEvent.TOOL_TYPE_UNKNOWN
+            if (tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER) {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> sendPen(event, "hover")
+                    MotionEvent.ACTION_HOVER_EXIT -> sendPen(event, "hover_exit")
+                    MotionEvent.ACTION_MOVE -> sendPen(event, "move")
+                }
+                true
+            } else false
+        }
         startUsbServer()
     }
 
@@ -83,11 +105,16 @@ class MainActivity : Activity() {
                         val client = try { server.accept() } catch (_: Exception) { break }
                         try {
                             output = BufferedOutputStream(client.getOutputStream())
+                            client.soTimeout = 1500
+                            val input = client.getInputStream()
                             connected.set(true)
                             runOnUiThread { updateConnection(true) }
                             while (running.get() && !client.isClosed) {
-                                try { Thread.sleep(250) } catch (_: InterruptedException) { break }
-                                if (client.isInputShutdown) break
+                                try {
+                                    if (input.read() < 0) break
+                                } catch (_: java.net.SocketTimeoutException) {
+                                    // ADB keepalive is expected; timeout lets the activity stop cleanly.
+                                }
                             }
                         } catch (_: Exception) {
                         } finally {
@@ -148,30 +175,6 @@ class MainActivity : Activity() {
             runOnUiThread { updateConnection(false) }
         }
         surface.updatePen(nx, ny, action != "up" && action != "hover_exit", action == "down" || (action == "move" && pressure > 0f))
-    }
-
-    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
-        if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS || event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER) {
-            when (event.actionMasked) {
-                MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> sendPen(event, "hover")
-                MotionEvent.ACTION_HOVER_EXIT -> sendPen(event, "hover_exit")
-                MotionEvent.ACTION_MOVE -> sendPen(event, "move")
-            }
-            return true
-        }
-        return super.dispatchGenericMotionEvent(event)
-    }
-
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS || event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER) {
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> sendPen(event, "down")
-                MotionEvent.ACTION_MOVE -> sendPen(event, "move")
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> sendPen(event, "up")
-            }
-            return true
-        }
-        return true
     }
 
     override fun onDestroy() {
