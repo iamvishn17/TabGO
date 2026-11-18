@@ -19,6 +19,9 @@ import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import kotlin.math.max
+import kotlin.math.sin
+import kotlin.math.cos
+import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
     companion object { private const val PORT = 38177 }
@@ -148,6 +151,10 @@ class MainActivity : Activity() {
         val nx = (event.getX(index) / width).coerceIn(0f, 1f)
         val ny = (event.getY(index) / height).coerceIn(0f, 1f)
         val pressure = event.getPressure(index).coerceIn(0f, 1f)
+        val tilt = event.getAxisValue(MotionEvent.AXIS_TILT, index)
+        val orientation = event.getAxisValue(MotionEvent.AXIS_ORIENTATION, index)
+        val tiltX = (sin(orientation) * tilt * 90f).roundToInt().coerceIn(-90, 90)
+        val tiltY = (cos(orientation) * tilt * 90f).roundToInt().coerceIn(-90, 90)
         eventCount++
         val now = System.currentTimeMillis()
         if (now - rateWindowStart >= 1000) { eventCount = 0; rateWindowStart = now }
@@ -158,8 +165,8 @@ class MainActivity : Activity() {
             put("y", ny.toDouble())
             put("pressure", pressure.toDouble())
             put("contact", action == "down" || (action == "move" && pressure > 0f))
-            put("tiltX", event.getAxisValue(MotionEvent.AXIS_TILT, index).toDouble())
-            put("tiltY", event.getAxisValue(MotionEvent.AXIS_ORIENTATION, index).toDouble())
+            put("tiltX", tiltX)
+            put("tiltY", tiltY)
             put("buttons", event.buttonState)
             put("tool", if (tool == MotionEvent.TOOL_TYPE_ERASER) "eraser" else "stylus")
             put("eventTime", event.eventTime)
