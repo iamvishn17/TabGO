@@ -721,17 +721,21 @@ class MainWindow(QMainWindow):
             self.sensitivity.value(), event.get("tiltX", 0), event.get("tiltY", 0),
             event.get("tool", "stylus"), bool(event.get("contact", False))
         )
-        if not injected:
-            if self.synthetic_pen.available:
-                # Do not silently downgrade a failed PT_PEN event to mouse input:
-                # that hides the real injection failure and loses pressure.
-                error = self.synthetic_pen.last_error
+        if injected:
+            self._last_injection_error = None
+        elif self.synthetic_pen.available:
+            # Keep failed pen injection visible without flooding the log on every sample.
+            error = self.synthetic_pen.last_error
+            if getattr(self, "_last_injection_error", None) != error:
                 self.add_log(f"PT_PEN injection failed (WinError {error}); mouse fallback suppressed")
-                if self.pen_down:
-                    self.mouse.button(False)
-                    self.pen_down = False
-            else:
+                self._last_injection_error = error
+            if self.pen_down:
+                self.mouse.button(False)
+                self.pen_down = False
+        else:
+            if not getattr(self, "_mouse_fallback_logged", False):
                 self.add_log("PT_PEN unavailable; using mouse-only fallback (no pressure support)")
+                self._mouse_fallback_logged = True
                 if self.mode == "Absolute":
                     self.mouse.move_absolute(x, y, self._screen_rect())
                 else:
