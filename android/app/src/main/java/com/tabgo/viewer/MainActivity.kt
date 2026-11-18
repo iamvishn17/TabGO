@@ -28,6 +28,7 @@ class MainActivity : Activity() {
     private val running = AtomicBoolean(true)
     private val connected = AtomicBoolean(false)
     @Volatile private var output: OutputStream? = null
+    @Volatile private var serverSocket: ServerSocket? = null
     private lateinit var status: TextView
     private lateinit var surface: TabletSurface
     private var lastSentAt = 0L
@@ -104,6 +105,7 @@ class MainActivity : Activity() {
         thread(name = "TabGO-USB-server", isDaemon = true) {
             try {
                 ServerSocket(PORT).use { server ->
+                    serverSocket = server
                     while (running.get()) {
                         val client = try { server.accept() } catch (_: Exception) { break }
                         try {
@@ -127,6 +129,7 @@ class MainActivity : Activity() {
                             runOnUiThread { updateConnection(false) }
                         }
                     }
+                    serverSocket = null
                 }
             } catch (_: Exception) {
                 runOnUiThread { status.text = "●  USB SERVICE ERROR" }
@@ -187,6 +190,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         running.set(false)
         try { output?.close() } catch (_: Exception) {}
+        try { serverSocket?.close() } catch (_: Exception) {}
         super.onDestroy()
     }
 
