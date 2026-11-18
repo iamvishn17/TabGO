@@ -351,6 +351,7 @@ class BridgeWorker(QThread):
                         try:
                             chunk = sock.recv(8192)
                             if not chunk:
+                                self.log_line.emit("Android socket closed (EOF); tablet ended the session")
                                 break
                             buffer += chunk
                             while b"\n" in buffer:
@@ -367,6 +368,7 @@ class BridgeWorker(QThread):
                                 break
                 self.log_line.emit("USB event connection closed")
             except (OSError, subprocess.SubprocessError) as exc:
+                self.log_line.emit(f"USB bridge error: {type(exc).__name__}: {exc}")
                 message = "Waiting for TabGO on the Android tablet"
                 if message != last_status:
                     self.status.emit(message, "warn"); last_status = message
@@ -566,7 +568,7 @@ class MainWindow(QMainWindow):
         self.capability_text.setObjectName("muted"); self.capability_text.setWordWrap(True)
         status.layout.addWidget(self.capability_text)
         layout.addWidget(status)
-        warning = QLabel("Native Windows PT_PEN pressure injection is used when available. Pressure-sensitive drawing in Windows apps requires a dedicated Windows pen digitizer/HID driver; this preview does not pretend mouse input is pressure input.")
+        warning = QLabel("TabGO sends synthetic Windows PT_PEN events without installing a kernel or virtual-HID driver. Whether a drawing application accepts synthetic pen pressure must be verified in that application. Mouse fallback is cursor-only and does not provide pressure.")
         warning.setObjectName("notice"); warning.setWordWrap(True); layout.addWidget(warning)
         layout.addStretch(1)
         self.stack.addWidget(page)
@@ -720,14 +722,24 @@ class MainWindow(QMainWindow):
             event.get("tool", "stylus"), bool(event.get("contact", False))
         )
         if not injected:
-            if self.mode == "Absolute":
-                self.mouse.move_absolute(x, y, self._screen_rect())
+            if self.synthetic_pen.available:
+                # Do not silently downgrade a failed PT_PEN event to mouse input:
+                # that hides the real injection failure and loses pressure.
+                error = self.synthetic_pen.last_error
+                self.add_log(f"PT_PEN injection failed (WinError {error}); mouse fallback suppressed")
+                if self.pen_down:
+                    self.mouse.button(False)
+                    self.pen_down = False
             else:
-                self.mouse.move_relative(x, y, self.sensitivity.value())
-            if action == "down" and not self.pen_down:
-                self.mouse.button(True); self.pen_down = True
-            elif action == "up" and self.pen_down:
-                self.mouse.button(False); self.pen_down = False
+                self.add_log("PT_PEN unavailable; using mouse-only fallback (no pressure support)")
+                if self.mode == "Absolute":
+                    self.mouse.move_absolute(x, y, self._screen_rect())
+                else:
+                    self.mouse.move_relative(x, y, self.sensitivity.value())
+                if action == "down" and not self.pen_down:
+                    self.mouse.button(True); self.pen_down = True
+                elif action == "up" and self.pen_down:
+                    self.mouse.button(False); self.pen_down = False
 
     def add_log(self, message):
         if hasattr(self, "log"):
