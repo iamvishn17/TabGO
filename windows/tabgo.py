@@ -10,7 +10,7 @@ import time
 import ctypes
 from ctypes import wintypes
 
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QAbstractNativeEventFilter
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton,
@@ -221,6 +221,44 @@ class SyntheticPen:
                 pass
             self.device = None
 
+
+class _HotkeyMessage(ctypes.Structure):
+    _fields_ = [("hwnd", ctypes.c_void_p), ("message", wintypes.UINT), ("wParam", wintypes.WPARAM)]
+
+class GlobalHotkeyFilter(QAbstractNativeEventFilter):
+    WM_HOTKEY = 0x0312
+    def __init__(self, callback, hotkey_id=0x5447):
+        super().__init__()
+        self.callback = callback
+        self.hotkey_id = hotkey_id
+        self.registered = False
+        if sys.platform == "win32":
+            try:
+                user32 = ctypes.WinDLL("user32", use_last_error=True)
+                user32.RegisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int, wintypes.UINT, wintypes.UINT]
+                user32.RegisterHotKey.restype = wintypes.BOOL
+                self.registered = bool(user32.RegisterHotKey(None, self.hotkey_id, 0x0002 | 0x0004, ord("T")))
+            except Exception:
+                self.registered = False
+
+    def nativeEventFilter(self, eventType, message):
+        try:
+            msg = ctypes.cast(int(message), ctypes.POINTER(_HotkeyMessage)).contents
+            if msg.message == self.WM_HOTKEY and msg.wParam == self.hotkey_id:
+                self.callback()
+                return True, 0
+        except Exception:
+            pass
+        return False, 0
+
+    def close(self):
+        if self.registered and sys.platform == "win32":
+            try:
+                ctypes.WinDLL("user32", use_last_error=True).UnregisterHotKey(None, self.hotkey_id)
+            except Exception:
+                pass
+            self.registered = False
+
 class BridgeWorker(QThread):
     status = Signal(str, str)
     event_received = Signal(dict)
@@ -378,6 +416,8 @@ class MainWindow(QMainWindow):
         self.worker.start()
         self._build_ui()
         self._load_screens()
+        self.hotkey_filter = GlobalHotkeyFilter(self.toggle_mode)
+        QApplication.instance().installNativeEventFilter(self.hotkey_filter)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_device_list)
         self.timer.start(3000)
@@ -498,7 +538,13 @@ class MainWindow(QMainWindow):
         self.pen_pressure_label = QLabel("0%")
         self.pen_pressure_label.setObjectName("metric")
         self.sensitivity = QSlider(Qt.Horizontal); self.sensitivity.setRange(500,4000); self.sensitivity.setValue(1800)
+        self.pressure_curve = QSlider(Qt.Horizontal); self.pressure_curve.setRange(50,200); self.pressure_curve.setValue(100)
+        self.pressure_curve_label = QLabel("Pressure curve exponent: 1.00")
+        self.pressure_curve.valueChanged.connect(lambda value: self.pressure_curve_label.setText(f"Pressure curve exponent: {value/100:.2f}"))
         pressure.layout.addWidget(self.pen_pressure_label)
+        pressure.layout.addWidget(QLabel("Pressure response"))
+        pressure.layout.addWidget(self.pressure_curve_label)
+        pressure.layout.addWidget(self.pressure_curve)
         pressure.layout.addWidget(QLabel("Relative cursor sensitivity"))
         pressure.layout.addWidget(self.sensitivity)
         layout.addWidget(pressure)
@@ -538,6 +584,9 @@ class MainWindow(QMainWindow):
         card.layout.addWidget(self.device_combo)
         card.layout.addWidget(self.refresh_button)
         layout.addWidget(card)
+        shortcut = Card("Keyboard shortcut")
+        shortcut.layout.addWidget(QLabel("Ctrl + Shift + T  ·  Switch Absolute / Relative mode"))
+        layout.addWidget(shortcut)
         info = Card("About TabGO")
         label = QLabel("TabGO is an independent graphics-tablet input bridge. It does not install a virtual monitor or modify your existing pen-display drivers.")
         label.setWordWrap(True); label.setObjectName("muted"); info.layout.addWidget(label)
@@ -615,6 +664,14 @@ class MainWindow(QMainWindow):
         self.mouse.reset()
         self.add_log("Positioning mode: " + value)
 
+    def toggle_mode(self):
+        target = "Relative" if self.mode == "Absolute" else "Absolute"
+        for button in self.mode_group.buttons():
+            if button.text() == target:
+                button.setChecked(True)
+                break
+        self.set_mode(target)
+
     def set_target_screen(self, index):
         self.target_screen = index
         self.mouse.reset()
@@ -629,6 +686,7 @@ class MainWindow(QMainWindow):
         self.last_event = event
         x = float(event.get("x", 0.0)); y = float(event.get("y", 0.0))
         pressure = max(0.0, min(1.0, float(event.get("pressure", 0.0))))
+        pressure = pressure ** (self.pressure_curve.value() / 100.0)
         action = str(event.get("action", "move")).lower()
         contact = action in ("down", "move") and bool(event.get("contact", action == "down" or pressure > 0))
         self.pressure_number.setText(f"{pressure*100:.0f}%")
@@ -666,6 +724,9 @@ class MainWindow(QMainWindow):
         self.worker.stop()
         if self.pen_down: self.mouse.button(False)
         self.synthetic_pen.close()
+        if hasattr(self, "hotkey_filter"):
+            QApplication.instance().removeNativeEventFilter(self.hotkey_filter)
+            self.hotkey_filter.close()
         event.accept()
 
 def apply_style(app):
