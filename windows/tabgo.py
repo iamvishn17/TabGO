@@ -35,6 +35,21 @@ def resource_path(name):
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, name)
 
+def find_adb():
+    found = shutil.which("adb")
+    if found:
+        return found
+    candidates = [
+        os.path.expandvars(r"%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe"),
+        os.path.expandvars(r"%USERPROFILE%\AppData\Local\Android\Sdk\platform-tools\adb.exe"),
+        os.path.expandvars(r"%ANDROID_HOME%\platform-tools\adb.exe"),
+        os.path.expandvars(r"%ANDROID_SDK_ROOT%\platform-tools\adb.exe"),
+    ]
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return None
+
 class WinMouse:
     """Mouse cursor bridge. Pressure is intentionally kept as telemetry until a signed pen HID driver exists."""
     def __init__(self):
@@ -281,7 +296,7 @@ class BridgeWorker(QThread):
         self.wait(1500)
 
     def _devices(self):
-        adb = shutil.which("adb")
+        adb = find_adb()
         if not adb:
             return None, []
         try:
@@ -607,7 +622,7 @@ class MainWindow(QMainWindow):
 
     def refresh_device_list(self):
         current = self.device_combo.currentData()
-        adb = shutil.which("adb")
+        adb = find_adb()
         self.device_combo.clear()
         if not adb:
             self.device_combo.addItem("ADB not found (install Platform Tools)", "")
