@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: tabgo-graphics-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   windows:
     name: Build TabGO.exe
