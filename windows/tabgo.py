@@ -10,7 +10,7 @@ import time
 import ctypes
 from ctypes import wintypes
 
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QAbstractNativeEventFilter
+from PySide6.QtCore import Qt, QThread, Signal, QAbstractNativeEventFilter
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton,
@@ -431,11 +431,9 @@ class MainWindow(QMainWindow):
         self.worker.start()
         self._build_ui()
         self._load_screens()
+        self.refresh_device_list()
         self.hotkey_filter = GlobalHotkeyFilter(self.toggle_mode)
         QApplication.instance().installNativeEventFilter(self.hotkey_filter)
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.refresh_device_list)
-        self.timer.start(3000)
 
     def _build_ui(self):
         root = QWidget()
