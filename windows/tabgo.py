@@ -736,14 +736,14 @@ class MainWindow(QMainWindow):
             if not getattr(self, "_mouse_fallback_logged", False):
                 self.add_log("PT_PEN unavailable; using mouse-only fallback (no pressure support)")
                 self._mouse_fallback_logged = True
-                if self.mode == "Absolute":
-                    self.mouse.move_absolute(x, y, self._screen_rect())
-                else:
-                    self.mouse.move_relative(x, y, self.sensitivity.value())
-                if action == "down" and not self.pen_down:
-                    self.mouse.button(True); self.pen_down = True
-                elif action == "up" and self.pen_down:
-                    self.mouse.button(False); self.pen_down = False
+            if self.mode == "Absolute":
+                self.mouse.move_absolute(x, y, self._screen_rect())
+            else:
+                self.mouse.move_relative(x, y, self.sensitivity.value())
+            if action == "down" and not self.pen_down:
+                self.mouse.button(True); self.pen_down = True
+            elif action == "up" and self.pen_down:
+                self.mouse.button(False); self.pen_down = False
 
     def add_log(self, message):
         if hasattr(self, "log"):
