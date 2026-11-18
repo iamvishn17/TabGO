@@ -95,6 +95,7 @@ class SyntheticPen:
         self.pointer_alive = False
         self.last = None
         self.last_error = 0
+        self.frame_id = 0
         if sys.platform != "win32":
             return
         try:
@@ -142,7 +143,7 @@ class SyntheticPen:
     def available(self):
         return bool(self.device)
 
-    def send(self, nx, ny, pressure, action, screen, mode, sensitivity, tilt_x=0, tilt_y=0, tool="stylus"):
+    def send(self, nx, ny, pressure, action, screen, mode, sensitivity, tilt_x=0, tilt_y=0, tool="stylus", contact=False):
         if not self.device:
             return False
         try:
@@ -167,6 +168,7 @@ class SyntheticPen:
             py = max(vy, min(vy + vh - 1, py))
 
             flags = 0x00002000
+            self.frame_id = (self.frame_id + 1) & 0xFFFFFFFF
             if not self.pointer_alive and action != "hover_exit":
                 flags |= 0x00000001
             if action == "hover_exit":
@@ -178,7 +180,7 @@ class SyntheticPen:
             elif action == "down":
                 flags |= 0x00000002 | 0x00000004 | 0x00010000 | 0x00000010
                 self.pointer_alive = True
-            elif action == "move" and pressure > 0:
+            elif action == "move" and contact:
                 flags |= 0x00000002 | 0x00000004 | 0x00020000 | 0x00000010
                 self.pointer_alive = True
             else:
@@ -191,7 +193,7 @@ class SyntheticPen:
             pi = pen.pointerInfo
             pi.pointerType = 3
             pi.pointerId = 1
-            pi.frameId = int(time.monotonic_ns() & 0xFFFFFFFF)
+            pi.frameId = self.frame_id
             pi.pointerFlags = flags
             pi.ptPixelLocation = self.POINT(px, py)
             pi.ptPixelLocationRaw = self.POINT(px, py)
@@ -628,7 +630,7 @@ class MainWindow(QMainWindow):
         injected = self.synthetic_pen.send(
             x, y, pressure, action, self._screen_rect(), self.mode,
             self.sensitivity.value(), event.get("tiltX", 0), event.get("tiltY", 0),
-            event.get("tool", "stylus")
+            event.get("tool", "stylus"), bool(event.get("contact", False))
         )
         if not injected:
             if self.mode == "Absolute":
