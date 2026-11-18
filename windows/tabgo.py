@@ -173,7 +173,10 @@ class BridgeWorker(QThread):
                                 except (ValueError, UnicodeDecodeError):
                                     self.log_line.emit("Ignored malformed pen packet")
                         except socket.timeout:
-                            continue
+                            try:
+                                sock.sendall(b"{}\n")
+                            except OSError:
+                                break
                 self.log_line.emit("USB event connection closed")
             except (OSError, subprocess.SubprocessError) as exc:
                 message = "Waiting for TabGO on the Android tablet"
