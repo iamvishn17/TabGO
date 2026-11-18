@@ -364,6 +364,7 @@ class MainWindow(QMainWindow):
         self.resize(1120, 740)
         self.setMinimumSize(900, 620)
         self.mouse = WinMouse()
+        self.synthetic_pen = SyntheticPen()
         self.mode = "Absolute"
         self.target_screen = 0
         self.pen_down = False
@@ -500,7 +501,7 @@ class MainWindow(QMainWindow):
         pressure.layout.addWidget(self.sensitivity)
         layout.addWidget(pressure)
         status = Card("Pen capabilities")
-        self.capability_text = QLabel("Waiting for Android stylus events.\n\nTabGO reads stylus hover, contact, pressure, tilt and button state when the tablet exposes them.")
+        self.capability_text = QLabel("Waiting for Android stylus events.\n\nTabGO reads hover, contact, pressure, tilt and button state when exposed by the tablet. Windows PT_PEN injection: " + ("available" if self.synthetic_pen.available else "unavailable (mouse fallback)"))
         self.capability_text.setObjectName("muted"); self.capability_text.setWordWrap(True)
         status.layout.addWidget(self.capability_text)
         layout.addWidget(status)
@@ -624,14 +625,20 @@ class MainWindow(QMainWindow):
         self.diag_labels["action"].setText(action.upper())
         self.diag_labels["tilt"].setText(f"{float(event.get('tiltX',0)):.2f}, {float(event.get('tiltY',0)):.2f}")
         self.diag_labels["rate"].setText(f"{event.get('rate', '—')}")
-        if self.mode == "Absolute":
-            self.mouse.move_absolute(x, y, self._screen_rect())
-        else:
-            self.mouse.move_relative(x, y, self.sensitivity.value())
-        if action == "down" and not self.pen_down:
-            self.mouse.button(True); self.pen_down = True
-        elif action == "up" and self.pen_down:
-            self.mouse.button(False); self.pen_down = False
+        injected = self.synthetic_pen.send(
+            x, y, pressure, action, self._screen_rect(), self.mode,
+            self.sensitivity.value(), event.get("tiltX", 0), event.get("tiltY", 0),
+            event.get("tool", "stylus")
+        )
+        if not injected:
+            if self.mode == "Absolute":
+                self.mouse.move_absolute(x, y, self._screen_rect())
+            else:
+                self.mouse.move_relative(x, y, self.sensitivity.value())
+            if action == "down" and not self.pen_down:
+                self.mouse.button(True); self.pen_down = True
+            elif action == "up" and self.pen_down:
+                self.mouse.button(False); self.pen_down = False
 
     def add_log(self, message):
         if hasattr(self, "log"):
@@ -641,6 +648,7 @@ class MainWindow(QMainWindow):
         self.worker.set_enabled(False)
         self.worker.stop()
         if self.pen_down: self.mouse.button(False)
+        self.synthetic_pen.close()
         event.accept()
 
 def apply_style(app):
