@@ -1,178 +1,78 @@
-name: Build TabGO
+name: Build TabGO Graphics Tablet
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [tabgo-native-v1]
 
 permissions:
   contents: read
 
-env:
-  ENGINE_REPO: efekurucay/anydisplay
-  ENGINE_REF: d090a9e20ac785fb34d1f53877e095c319e02569
-
 jobs:
+  windows:
+    name: Build TabGO.exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: windows/requirements.txt
+      - name: Install desktop dependencies
+        run: python -m pip install -r windows/requirements.txt pyinstaller
+      - name: Syntax check
+        run: python -m compileall -q windows
+      - name: Package standalone Windows executable
+        run: pyinstaller --noconfirm --clean --onefile --windowed --name TabGO windows/tabgo.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TabGO-Windows-EXE
+          path: dist/TabGO.exe
+          if-no-files-found: error
+
   android:
-    name: TabGO Android app
+    name: Build TabGO Android APK
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout TabGO
-        uses: actions/checkout@v4
-      - name: Checkout pinned video engine source
-        uses: actions/checkout@v4
-        with:
-          repository: efekurucay/anydisplay
-          ref: d090a9e20ac785fb34d1f53877e095c319e02569
-          path: engine
-      - name: Brand app and default to mirror mode
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          p = Path("engine/android/app/src/main/res/values/strings.xml")
-          s = p.read_text()
-          s = s.replace("AnyDisplay", "TabGO").replace("Extending %1$s", "Mirroring %1$s")
-          p.write_text(s)
-          p = Path("engine/android/app/src/main/java/dev/anydisplay/client/data/Settings.kt")
-          s = p.read_text().replace('prefs.getString(K_SCALE, "1.0")', 'prefs.getString(K_SCALE, "0.75")')
-          s = s.replace('prefs.getBoolean(K_MIRROR, false)', 'prefs.getBoolean(K_MIRROR, true)')
-          p.write_text(s)
-          p = Path("engine/android/app/src/main/res/xml/settings.xml")
-          s = p.read_text().replace('app:defaultValue="1.0"', 'app:defaultValue="0.75"')
-          s, n = re.subn(r'(<SwitchPreferenceCompat(?:(?!</SwitchPreferenceCompat>).)*app:defaultValue=")false("(?:(?!</SwitchPreferenceCompat>).)*app:key="mirror")', r'\1true\2', s, count=1, flags=re.S)
-          assert n == 1, "Could not set mirror mode as the default"
-          p.write_text(s)
-          p = Path("engine/android/settings.gradle.kts")
-          p.write_text(p.read_text().replace('rootProject.name = "AnyDisplay"', 'rootProject.name = "TabGO"'))
-          PY
+      - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
-      - name: Test and build APK
-        working-directory: engine/android
-        run: ./gradlew testDebugUnitTest assembleDebug
+        with:
+          gradle-version: "8.9"
+      - name: Build Android debug APK
+        working-directory: android
+        run: gradle assembleDebug
       - uses: actions/upload-artifact@v4
         with:
-          name: tabgo-android-apk
-          path: engine/android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-
-  windows:
-    name: TabGO Windows host
-    runs-on: windows-latest
-    steps:
-      - name: Checkout pinned video engine source
-        uses: actions/checkout@v4
-        with:
-          repository: efekurucay/anydisplay
-          ref: d090a9e20ac785fb34d1f53877e095c319e02569
-          path: engine
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: engine/windows
-      - name: Test and build Windows host
-        working-directory: engine/windows
-        run: |
-          cargo test
-          cargo build --release
-          Copy-Item target/release/anydisplay-win.exe target/release/TabGO.exe
-        shell: pwsh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tabgo-windows-host
-          path: engine/windows/target/release/TabGO.exe
+          name: TabGO-Android-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
   package:
-    name: Package complete TabGO ZIP
-    needs: [android, windows]
+    name: Package TabGO
+    needs: [windows, android]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout pinned license
-        uses: actions/checkout@v4
-        with:
-          repository: efekurucay/anydisplay
-          ref: d090a9e20ac785fb34d1f53877e095c319e02569
-          path: engine
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: tabgo-android-apk
+          name: TabGO-Windows-EXE
           path: dist/TabGO
       - uses: actions/download-artifact@v4
         with:
-          name: tabgo-windows-host
+          name: TabGO-Android-APK
           path: dist/TabGO
-      - name: Assemble package
+      - name: Prepare release ZIP
         run: |
           mv dist/TabGO/app-debug.apk dist/TabGO/TabGO-Android.apk
-          cp engine/LICENSE dist/TabGO/LICENSE-ANYDISPLAY.txt
-          cat > "dist/TabGO/Connect TabGO over USB.bat" <<'BAT'
-          @echo off
-          cd /d "%~dp0"
-          set "ANYDISPLAY_STORE=%APPDATA%\TabGO\host.json"
-          if not exist "%~dp0TabGO.exe" (
-            echo TabGO.exe is missing.
-            pause
-            exit /b 1
-          )
-          where adb >nul 2>nul
-          if errorlevel 1 (
-            echo Android Debug Bridge (adb) was not found.
-            echo Install Android SDK Platform-Tools or add adb.exe to PATH.
-            echo Then enable USB debugging and authorize this PC on the tablet.
-            pause
-            exit /b 1
-          )
-          echo.
-          echo TabGO - USB screen mirroring
-          echo Connect the tablet with USB and accept the USB debugging prompt.
-          echo.
-          "%~dp0TabGO.exe" usb
-          echo.
-          echo TabGO has stopped.
-          pause
-          BAT
-          cat > dist/TabGO/README.txt <<'TXT'
-          TabGO - wired Android screen mirroring
-
-          Contents
-          - TabGO-Android.apk: install this on the Android tablet.
-          - TabGO.exe: Windows host. It captures the existing Windows monitor and streams hardware-encoded H.264/HEVC video.
-          - Connect TabGO over USB.bat: one-click USB connection launcher.
-
-          First connection
-          1. Install TabGO-Android.apk on the tablet.
-          2. Enable Developer options > USB debugging on the tablet.
-          3. Connect the tablet to the PC and accept the USB debugging authorization prompt.
-          4. Ensure Android SDK Platform-Tools (adb) is installed and adb.exe is on PATH.
-          5. Open Connect TabGO over USB.bat on Windows.
-          6. Tap Open display on the tablet if it does not open automatically.
-
-          Mirror-only defaults
-          TabGO requests mirror mode and captures the primary Windows monitor by default.
-          It does not install or require a virtual display driver. No extended display is created.
-
-          Video
-          The Android client uses Android MediaCodec. The Windows host uses Windows Media Foundation
-          hardware encoding where available, preferring HEVC when negotiated; H.264 is available as
-          a compatibility option in Android Settings > Video codec. Set resolution to 3/4 and refresh
-          to 60 Hz for a performance-oriented starting point.
-
-          Notes
-          - Windows 10/11 x64.
-          - USB debugging is required for ADB forwarding.
-          - If adb reports unauthorized, unlock the tablet and accept the authorization dialog.
-          - Hardware codec availability depends on the PC GPU/driver and tablet decoder.
-          - This package is based on the MIT-licensed AnyDisplay project. See LICENSE-ANYDISPLAY.txt.
-          - The Windows host is a command-line companion launched through the included batch file.
-          TXT
-          cd dist && zip -r TabGO-Windows-Android.zip TabGO
+          cp windows/README.txt dist/TabGO/README.txt
+          cd dist && zip -r TabGO-Graphics-Tablet.zip TabGO
       - uses: actions/upload-artifact@v4
         with:
-          name: TabGO-Windows-Android
-          path: dist/TabGO-Windows-Android.zip
+          name: TabGO-Graphics-Tablet
+          path: dist/TabGO-Graphics-Tablet.zip
           if-no-files-found: error
