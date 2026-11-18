@@ -586,6 +586,21 @@ class MainWindow(QMainWindow):
             if self.pen_down: self.mouse.button(False); self.pen_down = False
 
     def set_status(self, message, kind):
+        if kind != "good" and hasattr(self, "synthetic_pen") and self.synthetic_pen.available and self.synthetic_pen.pointer_alive:
+            event = self.last_event or {}
+            self.synthetic_pen.send(
+                float(event.get("x", 0.5)), float(event.get("y", 0.5)), 0.0, "up",
+                self._screen_rect(), self.mode, self.sensitivity.value(),
+                event.get("tiltX", 0), event.get("tiltY", 0), event.get("tool", "stylus"), False
+            )
+            self.synthetic_pen.send(
+                float(event.get("x", 0.5)), float(event.get("y", 0.5)), 0.0, "hover_exit",
+                self._screen_rect(), self.mode, self.sensitivity.value(),
+                event.get("tiltX", 0), event.get("tiltY", 0), event.get("tool", "stylus"), False
+            )
+        if kind != "good" and self.pen_down:
+            self.mouse.button(False)
+            self.pen_down = False
         self.connection_big.setText(message)
         self.connection_detail.setText("USB pen-event bridge")
         self.connection_badge.setText("●  " + ("CONNECTED" if kind == "good" else "DISCONNECTED" if kind == "muted" else "SEARCHING"))
