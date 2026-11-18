@@ -164,8 +164,8 @@ class SyntheticPen:
                 px = int(x0 + max(0.0, min(1.0, nx)) * max(1, width - 1))
                 py = int(y0 + max(0.0, min(1.0, ny)) * max(1, height - 1))
             self.last = (nx, ny)
-            px = max(vx, min(vx + vw - 1, px))
-            py = max(vy, min(vy + vh - 1, py))
+            px = max(vx, min(vx + vw - 1, px)) - vx
+            py = max(vy, min(vy + vh - 1, py)) - vy
 
             flags = 0x00002000
             self.frame_id = (self.frame_id + 1) & 0xFFFFFFFF
