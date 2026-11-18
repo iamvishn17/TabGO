@@ -677,6 +677,8 @@ class MainWindow(QMainWindow):
     def set_mode(self, value):
         self.mode = value
         self.mouse.reset()
+        if hasattr(self, "synthetic_pen"):
+            self.synthetic_pen.last = None
         self.add_log("Positioning mode: " + value)
 
     def toggle_mode(self):
@@ -685,7 +687,6 @@ class MainWindow(QMainWindow):
             if button.text() == target:
                 button.setChecked(True)
                 break
-        self.set_mode(target)
 
     def set_target_screen(self, index):
         self.target_screen = index
