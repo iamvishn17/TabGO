@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.os.Bundle
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -29,6 +30,7 @@ class MainActivity : Activity() {
     private val connected = AtomicBoolean(false)
     @Volatile private var output: OutputStream? = null
     @Volatile private var serverSocket: ServerSocket? = null
+    @Volatile private var activeClient: Socket? = null
     private lateinit var status: TextView
     private lateinit var surface: TabletSurface
     private var lastSentAt = 0L
@@ -109,6 +111,7 @@ class MainActivity : Activity() {
                     while (running.get()) {
                         val client = try { server.accept() } catch (_: Exception) { break }
                         try {
+                            activeClient = client
                             output = BufferedOutputStream(client.getOutputStream())
                             client.soTimeout = 1500
                             val input = client.getInputStream()
@@ -121,10 +124,12 @@ class MainActivity : Activity() {
                                     // ADB keepalive is expected; timeout lets the activity stop cleanly.
                                 }
                             }
-                        } catch (_: Exception) {
+                        } catch (e: Exception) {
+                            Log.e("TabGO", "USB client session failed", e)
                         } finally {
                             connected.set(false)
                             output = null
+                            activeClient = null
                             try { client.close() } catch (_: Exception) {}
                             runOnUiThread { updateConnection(false) }
                         }
@@ -180,8 +185,11 @@ class MainActivity : Activity() {
                 output?.write(packet.toByteArray(Charsets.UTF_8))
                 output?.flush()
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e("TabGO", "Failed to send pen event; closing stale USB session", e)
             connected.set(false)
+            output = null
+            try { activeClient?.close() } catch (_: Exception) {}
             runOnUiThread { updateConnection(false) }
         }
         surface.updatePen(nx, ny, action != "up" && action != "hover_exit", action == "down" || (action == "move" && pressure > 0f))
@@ -190,6 +198,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         running.set(false)
         try { output?.close() } catch (_: Exception) {}
+        try { activeClient?.close() } catch (_: Exception) {}
         try { serverSocket?.close() } catch (_: Exception) {}
         super.onDestroy()
     }
