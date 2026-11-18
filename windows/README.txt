@@ -27,13 +27,14 @@ CURRENT IMPLEMENTATION SCOPE
 - Absolute mapping to a selected monitor and relative mouse movement.
 - Live pressure and pen-event diagnostics.
 
-IMPORTANT PRESSURE LIMITATION
-This preview receives real pressure values and displays them in TabGO. It does
-not yet expose a Windows HID digitizer device. Consequently, standard mouse
-cursor movement works, but pressure-sensitive drawing inside desktop drawing
-applications is NOT implemented in this preview. That requires a dedicated,
-properly signed Windows pen digitizer driver. We will not claim otherwise or
-silently install third-party drivers.
+WINDOWS PEN INPUT
+The Windows app uses Microsoft's documented CreateSyntheticPointerDevice /
+InjectSyntheticPointerInput PT_PEN API when available (Windows 10 1809+).
+It sends position, hover/contact state, pressure and tilt as synthetic pen
+pointer events, without installing a virtual HID or kernel driver.
+Compatibility with individual drawing applications must be verified on the
+actual PC; apps that ignore synthetic pen input may need a different backend.
+The app falls back to mouse movement if PT_PEN injection is unavailable.
 
 COMPATIBILITY NOTES
 - Windows 10/11 x64.
