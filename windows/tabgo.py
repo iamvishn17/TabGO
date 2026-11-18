@@ -86,6 +86,139 @@ class WinMouse:
     def reset(self):
         self.last = None
 
+
+class SyntheticPen:
+    """Windows user-mode PT_PEN injection. No virtual HID or kernel driver installation."""
+    def __init__(self):
+        self.device = None
+        self.user32 = None
+        self.pointer_alive = False
+        self.last = None
+        self.last_error = 0
+        if sys.platform != "win32":
+            return
+        try:
+            class POINT(ctypes.Structure):
+                _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+            class POINTER_INFO(ctypes.Structure):
+                _fields_ = [
+                    ("pointerType", ctypes.c_int), ("pointerId", wintypes.DWORD),
+                    ("frameId", wintypes.DWORD), ("pointerFlags", wintypes.DWORD),
+                    ("sourceDevice", ctypes.c_void_p), ("hwndTarget", ctypes.c_void_p),
+                    ("ptPixelLocation", POINT), ("ptHimetricLocation", POINT),
+                    ("ptPixelLocationRaw", POINT), ("ptHimetricLocationRaw", POINT),
+                    ("dwTime", wintypes.DWORD), ("historyCount", wintypes.DWORD),
+                    ("InputData", ctypes.c_int), ("dwKeyStates", wintypes.DWORD),
+                    ("PerformanceCount", ctypes.c_ulonglong), ("ButtonChangeType", ctypes.c_int)
+                ]
+            class POINTER_PEN_INFO(ctypes.Structure):
+                _fields_ = [
+                    ("pointerInfo", POINTER_INFO), ("penFlags", wintypes.DWORD),
+                    ("penMask", wintypes.DWORD), ("pressure", wintypes.DWORD),
+                    ("rotation", wintypes.DWORD), ("tiltX", ctypes.c_int), ("tiltY", ctypes.c_int)
+                ]
+            class PEN_UNION(ctypes.Union):
+                _fields_ = [("penInfo", POINTER_PEN_INFO), ("pointerInfo", POINTER_INFO)]
+            class POINTER_TYPE_INFO(ctypes.Structure):
+                _anonymous_ = ("data",)
+                _fields_ = [("type", wintypes.DWORD), ("data", PEN_UNION)]
+            self.POINT = POINT
+            self.POINTER_TYPE_INFO = POINTER_TYPE_INFO
+            self.user32 = ctypes.WinDLL("user32", use_last_error=True)
+            self.user32.CreateSyntheticPointerDevice.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.DWORD]
+            self.user32.CreateSyntheticPointerDevice.restype = ctypes.c_void_p
+            self.user32.InjectSyntheticPointerInput.argtypes = [ctypes.c_void_p, ctypes.POINTER(POINTER_TYPE_INFO), wintypes.UINT]
+            self.user32.InjectSyntheticPointerInput.restype = wintypes.BOOL
+            self.user32.DestroySyntheticPointerDevice.argtypes = [ctypes.c_void_p]
+            self.user32.DestroySyntheticPointerDevice.restype = None
+            self.device = self.user32.CreateSyntheticPointerDevice(3, 1, 3)
+            if not self.device:
+                self.last_error = ctypes.get_last_error()
+        except Exception:
+            self.device = None
+            self.last_error = ctypes.get_last_error() if sys.platform == "win32" else 0
+
+    @property
+    def available(self):
+        return bool(self.device)
+
+    def send(self, nx, ny, pressure, action, screen, mode, sensitivity, tilt_x=0, tilt_y=0, tool="stylus"):
+        if not self.device:
+            return False
+        try:
+            vx = self.user32.GetSystemMetrics(76)
+            vy = self.user32.GetSystemMetrics(77)
+            vw = max(1, self.user32.GetSystemMetrics(78))
+            vh = max(1, self.user32.GetSystemMetrics(79))
+            if mode == "Relative":
+                point = self.POINT()
+                self.user32.GetCursorPos(ctypes.byref(point))
+                if self.last is not None:
+                    px = point.x + int((nx - self.last[0]) * sensitivity)
+                    py = point.y + int((ny - self.last[1]) * sensitivity)
+                else:
+                    px, py = point.x, point.y
+            else:
+                x0, y0, width, height = screen
+                px = int(x0 + max(0.0, min(1.0, nx)) * max(1, width - 1))
+                py = int(y0 + max(0.0, min(1.0, ny)) * max(1, height - 1))
+            self.last = (nx, ny)
+            px = max(vx, min(vx + vw - 1, px))
+            py = max(vy, min(vy + vh - 1, py))
+
+            flags = 0x00002000
+            if not self.pointer_alive and action != "hover_exit":
+                flags |= 0x00000001
+            if action == "hover_exit":
+                flags |= 0x00020000
+                self.pointer_alive = False
+            elif action == "up":
+                flags |= 0x00000002 | 0x00040000
+                self.pointer_alive = True
+            elif action == "down":
+                flags |= 0x00000002 | 0x00000004 | 0x00010000 | 0x00000010
+                self.pointer_alive = True
+            elif action == "move" and pressure > 0:
+                flags |= 0x00000002 | 0x00000004 | 0x00020000 | 0x00000010
+                self.pointer_alive = True
+            else:
+                flags |= 0x00000002 | 0x00020000
+                self.pointer_alive = True
+
+            info = self.POINTER_TYPE_INFO()
+            info.type = 3
+            pen = info.penInfo
+            pi = pen.pointerInfo
+            pi.pointerType = 3
+            pi.pointerId = 1
+            pi.frameId = int(time.monotonic_ns() & 0xFFFFFFFF)
+            pi.pointerFlags = flags
+            pi.ptPixelLocation = self.POINT(px, py)
+            pi.ptPixelLocationRaw = self.POINT(px, py)
+            pi.historyCount = 1
+            pen.penFlags = 0x0004 if tool == "eraser" else 0
+            pen.penMask = 0x0001 | 0x0004 | 0x0008
+            pen.pressure = int(max(0.0, min(1.0, pressure)) * 1024)
+            pen.rotation = 0
+            pen.tiltX = max(-90, min(90, int(tilt_x)))
+            pen.tiltY = max(-90, min(90, int(tilt_y)))
+            ok = self.user32.InjectSyntheticPointerInput(self.device, ctypes.byref(info), 1)
+            if not ok:
+                self.last_error = ctypes.get_last_error()
+                return False
+            return True
+        except Exception:
+            self.last_error = ctypes.get_last_error() if sys.platform == "win32" else 0
+            return False
+
+    def close(self):
+        if self.device and self.user32:
+            try:
+                self.user32.DestroySyntheticPointerDevice(self.device)
+            except Exception:
+                pass
+            self.device = None
+
 class BridgeWorker(QThread):
     status = Signal(str, str)
     event_received = Signal(dict)
