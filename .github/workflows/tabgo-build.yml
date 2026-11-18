@@ -41,7 +41,7 @@ jobs:
           $prefs = "engine/android/app/src/main/res/xml/settings.xml"
           $px = Get-Content $prefs -Raw
           $px = $px.Replace('app:defaultValue="1.0"', 'app:defaultValue="0.75"')
-          $px = $px.Replace('app:defaultValue="false"', 'app:defaultValue="true"', 1)
+          $px = [regex]::Replace($px, '(?s)(<SwitchPreferenceCompat(?:(?!</SwitchPreferenceCompat>).)*app:defaultValue=")false("(?:(?!</SwitchPreferenceCompat>).)*app:key="mirror")', '$1true$2', 1)
           Set-Content -Path $prefs -Value $px -Encoding utf8
 
           $root = "engine/android/settings.gradle.kts"
